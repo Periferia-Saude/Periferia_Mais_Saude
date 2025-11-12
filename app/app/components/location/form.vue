@@ -1,0 +1,186 @@
+<template>
+  <Form @submit.prevent="submit">
+     <ProgressBar :steps="steps" :currentStep="currentStep" />
+    
+    <label class="tw-grid tw-mb-4 tw-mx-6">
+      <span>Como deseja encontrar o local?</span>
+      <select v-model="selectViaCep" class="tw-mx-auto" name="selectViaCep">
+        <option selected :value="true">via CEP</option>
+        <option :value="false">por Rua</option>
+      </select>
+    </label>
+
+    <keep-alive>
+      <Input
+        v-if="selectViaCep"
+        label="CEP"
+        v-model="location.cep_or_street"
+        name="location.cep"
+        type="text"
+        placeholder="Digite o cep..."
+        class="tw-mx-6 tw-mb-4"
+        v-mask="'#####-###'"
+      />
+      <Input
+        v-else
+        label="Rua"
+        v-model="location.cep_or_street"
+        name="location.street"
+        type="text"
+        placeholder="Digite a rua..."
+        class="tw-mx-6 tw-mb-4"
+      />
+    </keep-alive>
+
+    <div class="tw-h-80 tw-mb-14 tw-mt-4 tw-mx-0">
+      <p>Selecione o local no mapa:</p>
+      <client-only>
+        <LazyMap
+          :fullscreen="false"
+          isRegisterPoint
+          @pointSelected="(data: LocationType) => {
+              location.point.latitude = data.latitude;
+              location.point.longitude = data.longitude;
+            }"
+        />
+      </client-only>
+    </div>
+    <div>
+      <Input
+      label="Adicione uma foto do local:"
+      name="location.point.photo"
+      type="file"
+      accept="image/*"
+      class="tw-mx-6 tw-mb-4 tw-text-wrap tw-w-[90%]"
+      @change="handlePhotoChange"
+    />
+    </div>
+
+    <div v-if="photoUrl">
+      <h3 class="tw-text-center">Imagem selecionada:</h3>
+      <img
+        :src="photoUrl"
+        alt="Imagem selecionada"
+        class="tw-max-w-[15rem] tw-block tw-mx-auto"
+      />
+    </div>
+
+    <Button class="tw-block tw-mx-auto tw-mt-12" type="submit"
+    >
+    Próximo
+    <img 
+    src="/assets/img/arrow_right.svg"
+    height="20"
+    width="20"
+    />
+    </Button>
+  </Form>
+</template>
+
+<script setup lang="ts">
+import { type LocationCreateType, type LocationType } from "~/types/location.type";
+import LocationService from "~/services/LocationService";
+import { ref, onUnmounted, watch } from 'vue';
+import useLocationStore from '~/stores/use-location.store';
+import ProgressBar from '~/components/ProgressBar.vue';
+
+const steps = ['Local', 'Descrição', 'Endereço', 'Serviços'];
+const currentStep = 1;
+
+const selectViaCep = ref(true);
+
+const location = ref<LocationCreateType>({
+  cep_or_street: "",
+  point: {
+    latitude: 0,
+    longitude: 0,
+    photo: "",
+    address: "",
+  },
+});
+
+const locationStore = useLocationStore();
+
+// debounce helper for search input
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+watch(
+  () => location.value.cep_or_street,
+  (newVal) => {
+    if (!newVal || String(newVal).trim().length === 0) {
+      locationStore.searchPoints = [] as any;
+      return;
+    }
+
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      try {
+        await locationStore.searchLocation(String(newVal));
+      } catch (e) {
+        console.error('Erro na busca de localização:', e);
+      }
+    }, 600);
+  }
+);
+
+let currentObjectUrl: string | null = null;
+const photoUrl = ref<string | null>(null);
+
+function handlePhotoChange(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+
+  if (!file) return;
+
+  location.value = {
+    ...location.value,
+    point: {
+      ...location.value.point,
+      photo: file,
+    },
+  };
+
+  if (currentObjectUrl) {
+    try {
+      URL.revokeObjectURL(currentObjectUrl);
+    } catch (e) {
+      /* ignore */
+    }
+    currentObjectUrl = null;
+  }
+
+  try {
+    const url = URL.createObjectURL(file);
+    currentObjectUrl = url;
+    photoUrl.value = url;
+  } catch (e) {
+    photoUrl.value = null;
+  }
+}
+
+onUnmounted(() => {
+  if (currentObjectUrl) {
+    try {
+      URL.revokeObjectURL(currentObjectUrl);
+    } catch (e) {
+      /* ignore */
+    }
+    currentObjectUrl = null;
+  }
+});
+
+async function submit() {
+  if (location.value.point.latitude && location.value.point.longitude) {
+    try {
+      const res = await LocationService.create(location.value.point)
+       console.log('Resposta da API:', res)
+      if (res?.id) {
+        navigateTo(`/location/${res.id}/description/create`);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+}
+</script>
+
